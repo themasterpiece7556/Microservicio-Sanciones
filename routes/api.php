@@ -1,7 +1,8 @@
-<?
+<?php
+
+use Illuminate\Support\Facades\Route;
 use App\Http\Controllers\Api\SancionController;
 use App\Http\Controllers\Api\ReposicionController;
-
 
 Route::prefix('v1')->group(function () {
     // Sanciones

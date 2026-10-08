@@ -8,35 +8,22 @@ return new class extends Migration
 {
     public function up(): void
     {
-        Schema::create('sanciones', function (Blueprint $table) {
+        Schema::create('reposiciones', function (Blueprint $table) {
             $table->id();
-            
-            // Referencias a los IDs del sistema SOAP (Laragon)
-            $table->unsignedBigInteger('prestamo_id');
+            $table->foreignId('sancion_id')->constrained('sanciones')->onDelete('cascade');
+            $table->unsignedBigInteger('equipo_id');
             $table->unsignedBigInteger('solicitante_id');
-            
-            // Detalle de la sanción
-            $table->enum('tipo', ['Entrega_Tardia', 'Dano', 'Perdida']);
-            $table->text('descripcion');
-            $table->integer('dias_sancion')->default(0);
-            $table->decimal('monto_multa', 10, 2)->default(0.00);
-            
-            // Estado y vigencia
-            $table->enum('estado', ['Activa', 'Cumplida', 'Cancelada'])->default('Activa');
-            $table->timestamp('fecha_inicio')->useCurrent();
-            $table->timestamp('fecha_fin')->nullable();
-            
+            $table->string('codigo_equipo_nuevo')->nullable();
+            $table->text('observaciones')->nullable();
+            $table->decimal('costo_estimado', 10, 2)->default(0.00);
+            $table->enum('estado', ['Pendiente', 'Completada', 'Rechazada'])->default('Pendiente');
+            $table->timestamp('fecha_reposicion')->nullable();
             $table->timestamps();
-
-            // Índices para mejorar rendimiento en búsquedas
-            $table->index('prestamo_id');
-            $table->index('solicitante_id');
-            $table->index('estado');
         });
     }
 
     public function down(): void
     {
-        Schema::dropIfExists('sanciones');
+        Schema::dropIfExists('reposiciones');
     }
 };

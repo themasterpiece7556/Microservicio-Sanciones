@@ -26,9 +26,6 @@ class SoapLoanService
         $this->attachWssHeader($username, $token);
     }
 
-    /**
-     * Construye y adjunta el encabezado WS-Security XML
-     */
     private function attachWssHeader(string $username, string $token): void
     {
         $wssNs = 'http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd';
@@ -54,6 +51,11 @@ class SoapLoanService
     public function consultarPrestamos()
     {
         return $this->client->__soapCall('consultarPrestamos', []);
+    }
+
+    public function consultarEquipo(int $equipoId)
+    {
+        return $this->client->__soapCall('consultarEquipo', ['id' => $equipoId]);
     }
 
     public function actualizarEstadoEquipo(int $equipoId, string $nombre, string $tipo, string $estado)

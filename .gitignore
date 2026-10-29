@@ -3,9 +3,20 @@
 .env
 .env.backup
 .env.production
+.env.*
+!.env.example
 .phpactor.json
 .phpunit.result.cache
 /.codex
+/.agents/
+/.claude/
+/.opencode/
+/AGENTS.md
+/CLAUDE.md
+/.mcp.json
+/boost.json
+/opencode.json
+/.aws/
 /.cursor/
 /.idea
 /.nova
@@ -25,3 +36,4 @@ _ide_helper.php
 Homestead.json
 Homestead.yaml
 Thumbs.db
+package-lock.json

@@ -67,4 +67,13 @@ class SoapLoanService
             'estado' => $estado
         ]);
     }
+    
+    public function autenticarEnSoap(string $username, string $password)
+    {
+        // El login SOAP no requiere token previo, así que hacemos la llamada directa
+        return $this->client->__soapCall('login', [
+            'username' => $username,
+            'password' => $password
+        ]);
+    }
 }

@@ -4,6 +4,7 @@ namespace App\Models;
 
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\Relations\BelongsTo;
 
 class Reposicion extends Model
 {
@@ -22,7 +23,18 @@ class Reposicion extends Model
         'fecha_reposicion',
     ];
 
-    public function sancion()
+    protected function casts(): array
+    {
+        return [
+            'solicitante_id' => 'integer',
+            'sancion_id' => 'integer',
+            'equipo_id' => 'integer',
+            'costo_estimado' => 'decimal:2',
+            'fecha_reposicion' => 'datetime',
+        ];
+    }
+
+    public function sancion(): BelongsTo
     {
         return $this->belongsTo(Sancion::class, 'sancion_id');
     }

@@ -11,19 +11,36 @@ class SoapLoanService
 {
     protected SoapClient $client;
 
-    public function __construct(string $username, string $token)
-    {
-        $wsdl = env('SOAP_WSDL_URL');
-        $endpoint = env('SOAP_SERVICE_URL');
+    public function __construct(private string $username = '', private string $token = '') {}
 
-        $this->client = new SoapClient($wsdl, [
-            'location'   => $endpoint,
-            'trace'      => 1,
+    private function connect(): void
+    {
+        if (isset($this->client)) {
+            return;
+        }
+
+        if (! config('soap.wsdl') || ! config('soap.endpoint')) {
+            throw new \LogicException('Configure SOAP_WSDL_URL y SOAP_SERVICE_URL.');
+        }
+
+        $this->client = new SoapClient(config('soap.wsdl'), [
+            'location' => config('soap.endpoint'),
             'exceptions' => true,
             'cache_wsdl' => WSDL_CACHE_NONE,
+            'connection_timeout' => config('soap.timeout'),
+            'stream_context' => stream_context_create(['http' => ['timeout' => config('soap.timeout')]]),
         ]);
 
-        $this->attachWssHeader($username, $token);
+        if ($this->token !== '') {
+            $this->attachWssHeader($this->username, $this->token);
+        }
+    }
+
+    public function login(string $username, string $password): object
+    {
+        $this->connect();
+
+        return (object) $this->client->__soapCall('login', [$username, $password]);
     }
 
     private function attachWssHeader(string $username, string $token): void
@@ -33,13 +50,13 @@ class SoapLoanService
         $usernameNode = new SoapVar($username, XSD_STRING, null, null, 'Username', $wssNs);
         $passwordNode = new SoapVar($token, XSD_STRING, null, null, 'Password', $wssNs);
 
-        $usernameToken = new stdClass();
+        $usernameToken = new stdClass;
         $usernameToken->Username = $usernameNode;
         $usernameToken->Password = $passwordNode;
 
         $usernameTokenNode = new SoapVar($usernameToken, SOAP_ENC_OBJECT, null, null, 'UsernameToken', $wssNs);
 
-        $security = new stdClass();
+        $security = new stdClass;
         $security->UsernameToken = $usernameTokenNode;
 
         $securityNode = new SoapVar($security, SOAP_ENC_OBJECT, null, null, 'Security', $wssNs);
@@ -50,21 +67,27 @@ class SoapLoanService
 
     public function consultarPrestamos()
     {
+        $this->connect();
+
         return $this->client->__soapCall('consultarPrestamos', []);
     }
 
     public function consultarEquipo(int $equipoId)
     {
+        $this->connect();
+
         return $this->client->__soapCall('consultarEquipo', ['id' => $equipoId]);
     }
 
     public function actualizarEstadoEquipo(int $equipoId, string $nombre, string $tipo, string $estado)
     {
+        $this->connect();
+
         return $this->client->__soapCall('actualizarEquipo', [
-            'id'     => $equipoId,
+            'id' => $equipoId,
             'nombre' => $nombre,
-            'tipo'   => $tipo,
-            'estado' => $estado
+            'tipo' => $tipo,
+            'estado' => $estado,
         ]);
     }
 }

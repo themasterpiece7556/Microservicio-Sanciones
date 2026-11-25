@@ -1,253 +1,122 @@
-# Funcionamiento interno de la integración Laravel, JWT y SOAP
+# Integración de JWT, roles y SOAP
 
-Fecha de revisión: 4 de noviembre de 2026.
+Actualización: 24 de noviembre de 2026.
 
-## 1. Propósito y estado actual
+## Estado
 
-La integración busca que un usuario inicie sesión mediante la API REST de Laravel, reciba un token JWT y lo utilice en las siguientes peticiones. Laravel verifica ese token y prepara las llamadas al servidor SOAP con una cabecera WS-Security. Ambos sistemas conocen una misma clave secreta para verificar la firma.
+Laravel implementa login SOAP, emisión y validación JWT, vinculación de usuarios locales, cuatro middlewares de perfil y operaciones locales de sanciones y reposiciones. Las pruebas automatizadas ejercitan las rutas reales con SQLite en memoria y respuestas SOAP simuladas. La configuración de pruebas impone SQLite en memoria también cuando el proceso hereda `DB_URL`, `DB_CONNECTION` o `DB_DATABASE`.
 
-La parte de Laravel incluye el endpoint de login, la emisión y validación del JWT y la preparación del cliente SOAP autenticado. Esto se ha probado con respuestas SOAP simuladas. El recorrido completo contra el servidor real todavía está bloqueado: SOAP publica una operación de login cuyo método no está implementado, y Laravel aún no tiene los controladores de sanciones y reposiciones.
+Docker está activo. En el contenedor Laravel, PHP 8.5.12 dispone de `soap`, `pdo_mysql` y `pdo_sqlite`. La serialización WS-Security y el flujo REST → SOAP → persistencia se verificaron con SoapClient/SoapServer nativos contra un servidor temporal controlado, sin mocks del cliente SOAP. La consulta al servicio SOAP de negocio real ya pasa después de corregir el despacho, el contrato WSDL y la validación de Envelope. No se ejecutaron migraciones ni seeders sobre la base MySQL de trabajo.
 
-Este documento describe el código existente y señala expresamente los comportamientos previstos que todavía no están disponibles.
+El servicio SOAP corregido despacha `consultarPrestamos()` a `PrestamoService::listar()` y devuelve `RespuestaPrestamos` con `datos` de tipo `ListaPrestamos`. El login conserva su tipo específico y las otras operaciones tienen una envoltura general con `datos` de tipo `xsd:anyType`. La excepción de autenticación solo admite un Envelope no ambiguo con un único Body y la operación login correcta; tanto incluir la palabra login en argumentos como añadir un Body de otro namespace se rechazan antes del despacho. `JWT_SECRET` se obtiene del entorno, sin respaldo fijo. La clave pública anterior se reemplazó en ambos entornos locales, en archivos `.env` excluidos de Git.
 
-## 2. Responsabilidad de cada aplicación
+## Identidad y configuración
 
-| Aplicación | Responsabilidad | Datos que administra o debe administrar |
-| --- | --- | --- |
-| Microservicio Laravel | API REST, emisión del JWT, validación de peticiones y gestión de sanciones y reposiciones | Tablas locales de sanciones y reposiciones; la gestión HTTP de esos registros sigue pendiente |
-| Prestamo-soap | Operaciones SOAP de equipos y préstamos y comprobación del token recibido | Equipos, solicitantes y préstamos en su propia base de datos |
-| Cliente, por ejemplo Postman | Solicitar el login, conservar temporalmente el token y enviarlo en las siguientes peticiones | No necesita conocer la clave secreta compartida |
+- `POST /api/v1/login` recibe `username` y `password`, valida las credenciales con SOAP y exige un usuario local cuyo `soap_username` coincida exactamente.
+- La respuesta conserva `token`, `token_type: Bearer` y `expires_in`, e incorpora un resumen de `user` con ID local, nombre y rol. No devuelve contraseña ni secreto.
+- JWT usa HS256; sus claims son `sub`, `username`, `iss`, `aud`, `iat` y `exp`. `sub` es el username SOAP, no el ID local.
+- En cada petición se vuelve a consultar el usuario local. Cambiar su rol o eliminarlo afecta la siguiente petición aunque el JWT no haya vencido.
+- `User.solicitante_id` vincula al solicitante remoto. No hay claves foráneas entre bases ni equivalencia implícita entre los dos IDs.
+- Las políticas y `$request->user()` utilizan la identidad validada. El guard `jwt` se reutiliza y olvida su usuario al iniciar cada petición; una sesión web no sustituye al Bearer.
 
-Las aplicaciones tienen bases de datos separadas. Los campos `prestamo_id`, `solicitante_id` y `equipo_id` de Laravel son referencias al sistema SOAP; no son claves foráneas entre ambas bases. Cuando se implemente el negocio, será necesario comprobar que esas referencias existen y que la operación está permitida.
+| Variable | Uso |
+|---|---|
+| `SOAP_WSDL_URL` | Contrato WSDL accesible desde el proceso PHP |
+| `SOAP_SERVICE_URL` | Endpoint SOAP accesible desde ese mismo proceso |
+| `JWT_SECRET` | Secreto compartido, aleatorio, de al menos 32 bytes |
+| `JWT_TTL` | Vigencia positiva en segundos; por defecto 3600 |
+| `JWT_ISSUER` | Emisor; por defecto `sanciones` |
+| `JWT_AUDIENCE` | Destinatario; por defecto `prestamo-soap` |
 
-Laravel no consulta directamente la base de usuarios SOAP ni crea una copia local de sus contraseñas. El diseño actual delega la comprobación inicial de credenciales en la operación SOAP `login`.
+Mantener `JWT_SECRET` vacío en `.env.example`. Configurar el secreto real fuera de Git en ambas aplicaciones. Laravel utiliza `config()` para ser compatible con configuración cacheada.
 
-## 3. Qué es el JWT y por qué sirve la clave compartida
+La migración aditiva `add_soap_identity_to_users_table` incorpora `soap_username` nullable y único y `solicitante_id` nullable e indexado. Aplicarla en el entorno elegido después de revisar su conexión y permisos. No crea cuentas SOAP ni rellena vínculos existentes por inferencia.
 
-Un JWT firmado tiene tres partes: cabecera, contenido y firma. La cabecera indica el algoritmo; el contenido lleva los datos de identidad y vigencia; la firma permite comprobar que el token no se modificó y que fue generado por alguien que conoce la clave.
+`RoleUsersSeeder` prepara estos usernames locales de demostración: `administrador`, `encargado_laboratorio`, `almacenista` y `solicitante`. El username coincide con el rol por indicación de la evaluación, no por una regla general de autenticación. Las cuentas SOAP deben existir por separado con sus propias credenciales. El vínculo de solicitante requiere el ID remoto real; el seeder lo deja vacío hasta disponer de ese dato. El seeder usa contraseñas locales de demostración y no debe ejecutarse en producción.
 
-Se usa `HS256`, una firma HMAC con SHA-256. Es simétrica porque la misma clave permite generar y verificar la firma. No es cifrado: el contenido del token se puede leer. Por esa razón no se incluye la contraseña.
+## Rutas y perfiles
 
-La clave compartida identifica la confianza entre servicios. No es la contraseña del usuario y no se envía en las peticiones. Cualquiera que la conozca podría emitir tokens, por lo que debe mantenerse fuera del repositorio y del cliente.
+Solo `POST /api/v1/login` es público; conserva el límite de 5 intentos por minuto. El middleware global exige Bearer también en `/` y `/up`, según el alcance aprobado. Los middleware de perfil rechazan antes del controlador una operación no permitida.
 
-El payload emitido por Laravel contiene:
+| Perfil | Middleware | Rutas bajo `/api/v1` |
+|---|---|---|
+| Administrador | `IsAdministrator` | POST `admin/sanciones`, GET `admin/solicitantes/{id}/sanciones`, POST `admin/reposiciones`, GET `admin/reposiciones/{id}` |
+| Encargado de laboratorio | `CanManageSanctions` | POST `laboratorio/sanciones`, GET `laboratorio/solicitantes/{id}/sanciones` |
+| Almacenista | `CanProcessReplacements` | POST `almacen/reposiciones`, GET `almacen/reposiciones/{id}` |
+| Solicitante | `CanViewSanctions` | GET `solicitante/solicitantes/{id}/sanciones`, GET `solicitante/reposiciones/{id}`; solo registros propios |
 
-| Campo | Significado en esta implementación |
-| --- | --- |
-| `sub` | Nombre de usuario autenticado; actualmente no es un ID numérico |
-| `username` | Repite el nombre de usuario para facilitar compatibilidad |
-| `iss` | Emisor; por defecto `sanciones` |
-| `aud` | Destinatario; por defecto `prestamo-soap` |
-| `iat` | Momento de emisión, en segundos Unix |
-| `exp` | Momento de vencimiento, calculado como `iat + JWT_TTL` |
+Se conservan POST `/api/v1/sanciones`, GET `/api/v1/solicitantes/{id}/sanciones` y POST `/api/v1/reposiciones`. `AuthorizeRestOperation` delega al middleware del rol y aplica la misma lista de métodos permitidos antes de llegar al controlador.
 
-La biblioteca utilizada en Laravel es `firebase/php-jwt`, instalada mediante Composer y fijada en `composer.lock`.
+PUT `/api/v1/reposiciones/{id}/completar` permanece bloqueada: devuelve 401 sin Bearer válido y 403 para cualquier perfil autenticado. Completar reposiciones no está en los métodos autorizados de la evaluación.
 
-## 4. Archivos integrados en Laravel
+Correspondencias de nombres: `registrarSancion` usa `SancionController::store`; `consultarSancionesSolicitante` usa `consultarPorSolicitante`; `registrarReposicion` usa `ReposicionController::store`; `consultarReposicion` usa `show`.
 
-| Archivo | Función |
-| --- | --- |
-| `bootstrap/app.php` | Carga `routes/api.php` y configura respuestas JSON para errores de API |
-| `routes/api.php` | Declara el login y aplica el middleware JWT a las rutas de dominio |
-| `app/Http/Controllers/Api/LoginController.php` | Valida la entrada, solicita autenticación a SOAP y devuelve un JWT si hay éxito |
-| `app/Services/JwtService.php` | Genera el JWT firmado y comprueba la configuración mínima de clave y duración |
-| `app/Http/Middleware/AuthenticateJwt.php` | Rechaza tokens inválidos y prepara el cliente SOAP con la identidad verificada |
-| `app/Services/SoapLoanService.php` | Construye el cliente SOAP y la cabecera WS-Security; ejecuta las operaciones remotas |
-| `config/jwt.php` | Obtiene las variables de configuración del JWT |
-| `config/soap.php` | Obtiene WSDL, endpoint y tiempo de espera de SOAP |
-| `.env.example` | Declara las variables necesarias sin publicar secretos reales |
-| `tests/Feature/JwtLoginTest.php` | Prueba login y middleware con respuestas SOAP simuladas |
+## Autorización y llamadas SOAP
 
-## 5. Recorrido interno del login
-
-### Entrada HTTP
-
-El cliente envía una petición como esta a Laravel:
-
-```http
-POST /api/v1/login
-Content-Type: application/json
-Accept: application/json
-
-{
-  "username": "usuario_de_prueba",
-  "password": "contraseña_del_usuario"
-}
-```
-
-La ruta combina el prefijo `/api` configurado por Laravel y el grupo `/v1` de `routes/api.php`. No requiere JWT porque precisamente se utiliza para obtenerlo. Tiene un límite de cinco peticiones por minuto mediante `throttle:5,1`, con la identificación predeterminada del limitador de Laravel.
-
-### Validación y autenticación remota
-
-Laravel resuelve `LoginController`, `SoapLoanService` y `JwtService` a través de su contenedor de dependencias. Crear el cliente de servicio no abre inmediatamente una conexión SOAP: la conexión se realiza cuando se solicita una operación.
-
-El controlador exige `username` y `password` de tipo texto, con máximos de 255 y 1024 caracteres respectivamente. Si faltan o no cumplen las reglas, devuelve `422` y los errores de validación.
-
-Después ejecuta `SoapLoanService::login(username, password)`. El servicio obtiene el contrato WSDL y llama a la operación remota `login`, pasando ambos argumentos en el orden declarado por SOAP. Esta llamada inicial no lleva un JWT emitido por Laravel.
-
-El controlador espera un objeto con un campo `exito` booleano. No utiliza el token, nombre ni vencimiento que pudiera devolver SOAP: su decisión actual depende de `exito`.
-
-| Situación | Respuesta de Laravel |
-| --- | --- |
-| Datos de entrada inválidos | `422` |
-| SOAP devuelve `exito: false` | `401`, credenciales incorrectas |
-| SOAP falla o no se puede invocar | `502`, no se pudo autenticar con SOAP |
-| La respuesta no contiene `exito` booleano | `502`, respuesta SOAP inválida |
-| SOAP devuelve `exito: true` y la configuración JWT es válida | `200`, con un token nuevo |
-| Se supera el límite de intentos | `429` |
-
-Una configuración JWT inválida provoca una excepción de configuración; no se presenta como credenciales incorrectas.
-
-### Emisión del token
-
-`JwtService::issue()` exige un secreto de al menos 32 bytes y una duración positiva. Construye el payload y lo firma con `HS256`. El resultado HTTP tiene esta forma ilustrativa:
+Cada middleware compara manualmente `$request->user()->role` y comprueba la operación requerida. Un rol incorrecto recibe exactamente:
 
 ```json
-{
-  "token": "JWT_FIRMADO",
-  "token_type": "Bearer",
-  "expires_in": 3600
-}
+{"error":"Permisos insuficientes para ejecutar este método"}
 ```
 
-Se añade `Cache-Control: no-store` para indicar que esa respuesta no debe almacenarse en caché.
+La respuesta tiene estado 403 y se genera antes del controlador, la validación del cuerpo o cualquier llamada SOAP. Un token ausente, alterado, vencido, con claims incorrectos o sin usuario vinculado devuelve 401. Un secreto ausente o inválido es un error de configuración del servidor.
 
-El usuario no necesita iniciar sesión de nuevo para cada operación mientras el token sea válido. Sí necesita autenticación inicial: el diseño actual todavía depende de SOAP durante el login.
+Las políticas aplican además las restricciones sobre registros: el solicitante recibe 404 al consultar IDs ajenos y no puede provocar consultas remotas para ellos.
 
-## 6. Recorrido de una petición protegida
+| Contexto | `consultarPrestamos()` |
+|---|---|
+| Administrador crea/consulta sanciones | Permitido y utilizado |
+| Laboratorio crea/consulta sanciones | Permitido y utilizado |
+| Solicitante consulta sus sanciones | Permitido y utilizado |
+| Almacenista | Prohibido; sus operaciones son locales |
+| Cualquier consulta o registro de reposición implementado | Local; no necesita consultar préstamos |
 
-El cliente presenta el token así:
+El cliente SOAP se resuelve usando los atributos de la petición validada, sin capturar el JWT de otro usuario. Construye `Security/UsernameToken` en el namespace WS-Security, con `Username` igual al sujeto y `Password` igual al Bearer. No admite `X-WSS-Username` ni `X-WSS-Token` como alternativa de identidad.
 
-```http
-Authorization: Bearer JWT_FIRMADO
+El contrato de préstamos esperado es `exito: true` y `datos` como lista de filas con `id` y `solicitante_id` positivos. Esta forma corresponde a `PrestamoService::listar()` y `Prestamo::listar()` y está publicada por el WSDL corregido; el cliente nativo la aceptó en la prueba contra el servicio real. Una respuesta de error o malformada produce 502 sin escritura local. Al responder consultas, solo se incluyen préstamos del solicitante consultado.
+
+## Negocio
+
+Las consultas de sanciones responden `exito` y `datos`, con `datos.sanciones` y `datos.prestamos_soap`.
+
+Crear una sanción requiere préstamo y solicitante positivos, tipo `Entrega_Tardia`, `Dano` o `Perdida`, descripción, y opcionalmente días no negativos y multa no negativa dentro del rango decimal admitido. Se verifica en SOAP la relación préstamo/solicitante. Los días deben permitir una fecha final dentro del rango de `TIMESTAMP` de MySQL (hasta el 19 de enero de 2038 a las 03:14:07 UTC); se rechazan antes de llamar a SOAP cuando lo superan. El servidor asigna estado `Activa`, fecha inicial y fecha final si hay días; el cliente no puede imponer el estado.
+
+Crear una reposición exige sanción local existente, solicitante coincidente, equipo positivo, costo válido y observaciones opcionales. Se guarda como `Pendiente`. No verifica el equipo remoto ni sincroniza cambios SOAP, porque el flujo permitido al almacenista es local.
+
+Consultar una reposición incluye su sanción. El solicitante solo puede consultar registros cuya reposición y sanción asociada pertenecen a su ID remoto, incluso ante datos históricos inconsistentes. No se devuelve información de terceros al denegar acceso.
+
+## Demostración y pruebas
+
+En Postman usar una variable `base_url` resuelta para el entorno y añadir las rutas relativas anteriores. El login envía `username`/`password`, no el ejemplo `email` de la guía Sanctum. Guardar el `token` de la respuesta en una variable privada y usar Authorization de tipo Bearer. No guardar secretos ni tokens en el repositorio.
+
+Agrupar peticiones en autenticación/401, rechazos por perfil/403 y operaciones permitidas/200–201. Incluir intentos por rutas compatibles y accesos a registros ajenos. Los headers `X-WSS-*` no son necesarios.
+
+Comandos de verificación:
+
+```bash
+php artisan test --compact
+php artisan route:list --path=api --except-vendor
+vendor/bin/pint --dirty --format agent
+composer validate --no-check-publish
+git diff --check
 ```
 
-La implementación actual utiliza ese header. No lee `X-WSS-Username` ni `X-WSS-Token` de la petición REST.
+Las pruebas cubren persistencia, filtrado, matriz de perfiles, no ejecución del controlador/SOAP ante 403, respuestas SOAP simuladas, limitación de login, claims JWT, cambio de rol y aislamiento entre peticiones.
 
-Antes de ejecutar la acción protegida, `AuthenticateJwt`:
+## Resultado de pruebas en Docker
 
-1. Obtiene el token Bearer y comprueba que la clave local tiene la longitud mínima.
-2. Decodifica el JWT y verifica su firma usando exclusivamente `HS256`.
-3. Delega en la biblioteca la comprobación de vencimiento y restricciones temporales presentes.
-4. Exige `exp`, `iat` y un `sub` de tipo texto no vacío.
-5. Comprueba que `iss` y `aud` coincidan exactamente con la configuración local.
-6. Devuelve `401` si el token falta o es inválido.
-7. Guarda la identidad en el atributo de petición `jwt_subject`.
-8. Registra una instancia de `SoapLoanService` con alcance de petición, construida con el `sub` validado y el JWT original.
+- Suite completa en PHP 8.5.12 con SOAP real activado: 155 pruebas aprobadas y 1.049 aserciones, sin omisiones. Sin activar el grupo remoto se ejecutan 151 pruebas y se omiten expresamente cuatro pruebas externas.
+- Transporte nativo controlado: cuatro pruebas aprobadas, 29 aserciones, incluidas dentro de la suite anterior. Verifican XML y namespaces WS-Security, Bearer exacto, login sin cabecera de seguridad, argumentos de equipos y login/creación de sanción con SOAP nativo y base de pruebas.
+- MySQL 8.4: 134 pruebas y 975 aserciones aprobadas sobre una base temporal exclusiva. Incluyeron todas las migraciones, los perfiles, el negocio y el límite TIMESTAMP. La base temporal fue eliminada después; no se usó la base de trabajo.
+- HTTP real con Postman: 401 sin Bearer, 422 al omitir campos del login, 401 al enviar credenciales ficticias (recorrido Laravel → SOAP) y WSDL accesible con 200. Las ocho aserciones correspondientes pasaron. Postman CLI devuelve exit 1 para los HTTP 401/422 aunque sus aserciones de contrato pasen; esos códigos HTTP son el resultado esperado.
+- Integración SOAP real: cuatro pruebas aprobadas. Cubren login negativo, consulta de préstamos con JWT compartido y lista tipada, rechazo de la palabra login en otra operación y rechazo de Body duplicado con namespace distinto.
+- Prueba de autenticación del repositorio SOAP: login positivo, JWT aceptado por WS-Security, comparación exacta del username, credenciales inválidas y rechazo de secretos ausentes/cortos. Crea un usuario temporal y revierte su transacción.
+- La base de trabajo conserva pendientes las migraciones `add_role_to_users_table` y `add_soap_identity_to_users_table`. Probarlas en la base temporal no las aplica al entorno de trabajo.
 
-El controlador que consuma ese servicio recibirá un cliente preparado para usar la identidad autenticada. No necesita confiar en un nombre de usuario libre enviado por el cliente.
+Las cuatro pruebas remotas de Laravel son de solo lectura, no crean cuentas ni datos de negocio y no imprimen el contenido de los préstamos. Se reproducen con:
 
-Esto autentica la petición, pero no decide sus permisos. Aún faltan las reglas de autorización para determinar quién puede sancionar, consultar información ajena o completar reposiciones.
-
-## 7. Cómo se construye y envía WS-Security
-
-`SoapLoanService` utiliza `SoapClient`, `SoapHeader` y `SoapVar` de PHP. Al ejecutar la primera operación, configura el WSDL, el endpoint, las excepciones y un tiempo de espera de diez segundos para conexión y contexto HTTP. Desactiva la caché WSDL y reutiliza el cliente durante la vida de esa instancia.
-
-Si tiene un token, agrega una cabecera con esta estructura conceptual; PHP puede elegir otros prefijos XML equivalentes:
-
-```xml
-<soap:Header>
-  <wsse:Security>
-    <wsse:UsernameToken>
-      <wsse:Username>usuario_autenticado</wsse:Username>
-      <wsse:Password>JWT_FIRMADO</wsse:Password>
-    </wsse:UsernameToken>
-  </wsse:Security>
-</soap:Header>
+```bash
+docker compose exec -e RUN_LIVE_SOAP_TESTS=1 laravel.test vendor/bin/phpunit tests/Feature/LiveSoapContractTest.php
 ```
 
-El namespace WS-Security utilizado es:
-
-```text
-http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd
-```
-
-El nodo `Password` contiene el JWT, no la contraseña del usuario ni el secreto compartido. Esta es una convención de estas aplicaciones sobre una cabecera UsernameToken; no incorpora por sí misma cifrado del mensaje, firma XML ni un perfil completo de seguridad WS-Security. El transporte de credenciales y tokens debe protegerse con HTTPS cuando corresponda.
-
-El cliente Laravel dispone de estos métodos:
-
-| Método local | Operación SOAP |
-| --- | --- |
-| `login()` | `login` |
-| `consultarPrestamos()` | `consultarPrestamos` |
-| `consultarEquipo()` | `consultarEquipo` |
-| `actualizarEstadoEquipo()` | `actualizarEquipo` |
-
-No existe una operación SOAP de registrar sanciones. Las sanciones pertenecen a la base de Laravel. Una futura acción podría consultar datos remotos antes de guardarlas localmente.
-
-## 8. Qué hace SOAP al recibir el mensaje
-
-`Prestamo-soap/servicio/server.php` carga NuSOAP, conecta con MySQL, registra las operaciones y delega su ejecución a los servicios de autenticación, equipos y préstamos.
-
-`AuthService::validarWssSecurity()` interpreta el XML con DOM y XPath, localiza `Security/UsernameToken/Password` en el namespace WS-Security y extrae el JWT. Después llama a `JWT::decode()` con el secreto y `HS256`. Devuelve los claims si tiene éxito y `null` si la validación falla.
-
-Actualmente SOAP no aplica el mismo contrato estricto de Laravel: no exige expresamente emisor, destinatario ni todos los campos temporales, y no compara el `Username` del XML con la identidad del token. El punto de entrada utiliza el resultado como comprobación de acceso, sin pasar esa identidad a reglas de permisos de cada operación.
-
-El middleware antiguo `middleware/AuthMiddleware.php`, basado en consultar `token_acceso` en la base de datos, no está conectado al punto de entrada revisado. No debe confundirse con el mecanismo JWT/WS-Security que sí usa `server.php`.
-
-Aunque compartir algoritmo y secreto permite compatibilidad criptográfica, SOAP no implementa actualmente la emisión de tokens en un método de login. Tampoco se ha comprobado aceptación bidireccional de tokens reales.
-
-## 9. Configuración y contenedores
-
-| Variable | Función |
-| --- | --- |
-| `SOAP_WSDL_URL` | URL del contrato SOAP, normalmente terminada en `?wsdl` |
-| `SOAP_SERVICE_URL` | URL que recibe las llamadas SOAP |
-| `JWT_SECRET` | Clave compartida; debe coincidir exactamente en ambos servicios |
-| `JWT_TTL` | Duración del token en segundos; `3600` equivale a una hora |
-| `JWT_ISSUER` | Emisor esperado por Laravel |
-| `JWT_AUDIENCE` | Destinatario esperado por Laravel |
-
-Laravel lee estas variables desde archivos de `config/`, y el resto del código utiliza `config()`. Esto permite trabajar con configuración cacheada. Tras cambiar `.env`, puede limpiarse la caché con `php artisan config:clear` o su equivalente dentro de Sail.
-
-Las variables vacías en `.env.example` son marcadores para cada instalación. El secreto real no debe copiarse a ese archivo ni al documento.
-
-Laravel usa Sail con PHP 8.5 y MySQL 8.4; también incluye phpMyAdmin. SOAP dispone de un contenedor PHP 8.3/Apache con NuSOAP y otro MySQL 8.4. NuSOAP implementa el servidor en PHP; Laravel sí necesita la extensión nativa SOAP para su `SoapClient`.
-
-Los proyectos no comparten actualmente una red Docker. La configuración local de Laravel apunta a `host.docker.internal:8088`, mientras SOAP publica el puerto solo en `127.0.0.1`. La conectividad desde el contenedor debe resolverse y verificarse; no basta con que el WSDL abra desde el equipo anfitrión.
-
-## 10. Persistencia de sanciones y reposiciones
-
-La migración de sanciones define préstamo, solicitante, tipo, descripción, días, multa, estado y fechas de vigencia. Los tipos incluyen entrega tardía, daño y pérdida.
-
-La migración de reposiciones define la sanción relacionada, equipo, solicitante, código del equipo nuevo, observaciones, costo, estado y fecha. La relación local usa una clave foránea con eliminación en cascada: borrar una sanción elimina sus reposiciones asociadas.
-
-Los modelos representan una relación de una sanción a muchas reposiciones. Todavía no hay lógica HTTP que calcule multas o fechas, cree esos registros o sincronice cambios de equipos con SOAP. Tampoco hay una transacción distribuida entre las dos bases.
-
-## 11. Pruebas y alcance de la verificación
-
-En la revisión del 4 de noviembre de 2026, `php artisan test --compact` completó nueve pruebas con veinticinco aserciones. Siete pruebas corresponden a JWT/login y dos son los ejemplos iniciales de Laravel.
-
-Se cubren entrada obligatoria, emisión del JWT después de un éxito SOAP simulado, credenciales incorrectas, excepción SOAP, secreto corto, token ausente o alterado, vencimiento y emisor/destinatario incorrectos.
-
-Las pruebas protegidas usan una ruta temporal creada dentro del test. Por tanto, no prueban los controladores de sanciones y reposiciones ni demuestran que esas rutas de negocio funcionen.
-
-No se ha probado el intercambio SOAP real, la serialización WS-Security completa, el acceso a usuarios reales, los permisos ni la escritura del negocio en ambas aplicaciones. El PHP local revisado carece de `soap` y `pdo_mysql`; esa observación no describe necesariamente las extensiones de los contenedores en ejecución.
-
-## 12. Fallas pendientes y su efecto
-
-| Hallazgo | Efecto |
-| --- | --- |
-| SOAP detecta login buscando la palabra `login` en todo el XML | Puede omitir autenticación para una operación distinta; necesita identificar exactamente la operación del cuerpo SOAP |
-| `AuthService::login()` no existe | Impide la autenticación real solicitada por Laravel |
-| El esquema SQL disponible no incluye `username` y `password_hash` | No proporciona la estructura de credenciales usada por los ejemplos; la base real aún debe confirmarse |
-| Faltan `SancionController` y `ReposicionController` | Las rutas de negocio no pueden ejecutar sus acciones; `route:list` falla al inspeccionarlas |
-| `consultarPrestamos` llama a `$ps->consultar()`, pero existe `listar()` | La operación de consulta de préstamos falla |
-| WSDL declara `datos` como `RespuestaLogin` para todas las operaciones | No describe equipos ni listas de préstamos y puede impedir una serialización correcta |
-| SOAP mantiene el secreto en código y aplica menos comprobaciones de claims | Dificulta administrar el secreto y deja políticas de aceptación distintas entre sistemas |
-| No hay autorización por operación | Un token válido no demuestra permiso para todas las acciones |
-| La disponibilidad del equipo se consulta antes de la transacción, sin bloqueo | Dos solicitudes simultáneas podrían registrar préstamos para el mismo equipo |
-| El login Laravel captura errores SOAP sin registrarlos | El cliente recibe un error controlado, pero se pierde información útil para diagnóstico |
-| La red entre proyectos no está resuelta | Puede impedir que Laravel alcance SOAP aunque ambos contenedores estén activos |
-
-## 13. Guion para explicar el funcionamiento
-
-“Tenemos dos aplicaciones con responsabilidades separadas. El sistema SOAP administra equipos, solicitantes y préstamos. El microservicio Laravel expone una API REST y está preparado para administrar sanciones y reposiciones relacionadas con esos préstamos.
-
-El cliente solicita el login a Laravel. Laravel envía las credenciales a la operación de autenticación SOAP y, cuando recibe confirmación, genera un JWT firmado con HS256. Ese token contiene la identidad y su fecha de vencimiento, sin incluir la contraseña.
-
-En las siguientes peticiones el cliente presenta el JWT como Bearer. Un middleware de Laravel verifica su firma y sus datos antes de permitir continuar. Después prepara un cliente SOAP que incorpora el mismo JWT en una cabecera WS-Security.
-
-SOAP puede verificar la firma porque conoce el mismo secreto. Así se evita repetir el envío de la contraseña en cada operación. La clave compartida permite verificar autenticidad; los permisos de cada acción deben comprobarse por separado.
-
-La generación y validación del token ya se probaron en Laravel con SOAP simulado. Todavía debemos completar el login SOAP, corregir su protección y contrato, resolver la red e implementar los controladores de negocio para demostrar el recorrido completo.”
+`tests/soap.wsdl` y `tests/soap-router.php` pertenecen exclusivamente al servidor temporal de pruebas; no sustituyen el contrato de `Prestamo-soap`. Las pruebas remotas se ejecutan contra el contenedor SOAP reconstruido con la corrección. Un login positivo REST con usuarios reales sigue requiriendo aplicar las dos migraciones pendientes y configurar sus vínculos locales; no se inventan ni se publican credenciales de esos usuarios.

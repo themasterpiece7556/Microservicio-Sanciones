@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<definitions xmlns="http://schemas.xmlsoap.org/wsdl/" xmlns:tns="urn:PrestamoEquipos" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:soap="http://schemas.xmlsoap.org/wsdl/soap/" xmlns:soapenc="http://schemas.xmlsoap.org/soap/encoding/" targetNamespace="urn:PrestamoEquipos">
+  <types>
+    <xsd:schema targetNamespace="urn:PrestamoEquipos">
+      <xsd:complexType name="Prestamo"><xsd:all>
+        <xsd:element name="id" type="xsd:int"/>
+        <xsd:element name="solicitante_id" type="xsd:int"/>
+      </xsd:all></xsd:complexType>
+      <xsd:complexType name="PrestamoArray"><xsd:complexContent><xsd:restriction base="soapenc:Array"><xsd:attribute ref="soapenc:arrayType" xmlns:wsdl="http://schemas.xmlsoap.org/wsdl/" wsdl:arrayType="tns:Prestamo[]"/></xsd:restriction></xsd:complexContent></xsd:complexType>
+      <xsd:complexType name="RespuestaSOAP"><xsd:all>
+        <xsd:element name="exito" type="xsd:boolean"/>
+        <xsd:element name="datos" type="tns:PrestamoArray"/>
+      </xsd:all></xsd:complexType>
+    </xsd:schema>
+  </types>
+  <message name="loginRequest"><part name="username" type="xsd:string"/><part name="password" type="xsd:string"/></message>
+  <message name="consultarPrestamosRequest"/>
+  <message name="consultarEquipoRequest"><part name="id" type="xsd:int"/></message>
+  <message name="actualizarEquipoRequest"><part name="id" type="xsd:int"/><part name="nombre" type="xsd:string"/><part name="tipo" type="xsd:string"/><part name="estado" type="xsd:string"/></message>
+  <message name="response"><part name="return" type="tns:RespuestaSOAP"/></message>
+  <portType name="PrestamoPortType">
+    <operation name="login"><input message="tns:loginRequest"/><output message="tns:response"/></operation>
+    <operation name="consultarPrestamos"><input message="tns:consultarPrestamosRequest"/><output message="tns:response"/></operation>
+    <operation name="consultarEquipo"><input message="tns:consultarEquipoRequest"/><output message="tns:response"/></operation>
+    <operation name="actualizarEquipo"><input message="tns:actualizarEquipoRequest"/><output message="tns:response"/></operation>
+  </portType>
+  <binding name="PrestamoBinding" type="tns:PrestamoPortType">
+    <soap:binding style="rpc" transport="http://schemas.xmlsoap.org/soap/http"/>
+    <operation name="login"><soap:operation soapAction="urn:PrestamoEquipos#login"/><input><soap:body use="encoded" namespace="urn:PrestamoEquipos" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></input><output><soap:body use="encoded" namespace="urn:PrestamoEquipos" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></output></operation>
+    <operation name="consultarPrestamos"><soap:operation soapAction="urn:PrestamoEquipos#consultarPrestamos"/><input><soap:body use="encoded" namespace="urn:PrestamoEquipos" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></input><output><soap:body use="encoded" namespace="urn:PrestamoEquipos" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></output></operation>
+    <operation name="consultarEquipo"><soap:operation soapAction="urn:PrestamoEquipos#consultarEquipo"/><input><soap:body use="encoded" namespace="urn:PrestamoEquipos" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></input><output><soap:body use="encoded" namespace="urn:PrestamoEquipos" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></output></operation>
+    <operation name="actualizarEquipo"><soap:operation soapAction="urn:PrestamoEquipos#actualizarEquipo"/><input><soap:body use="encoded" namespace="urn:PrestamoEquipos" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></input><output><soap:body use="encoded" namespace="urn:PrestamoEquipos" encodingStyle="http://schemas.xmlsoap.org/soap/encoding/"/></output></operation>
+  </binding>
+  <service name="PrestamoService"><port name="PrestamoPort" binding="tns:PrestamoBinding"><soap:address location="http://127.0.0.1/soap-test"/></port></service>
+</definitions>

@@ -65,21 +65,43 @@ class SoapLoanService
         $this->client->__setSoapHeaders([$header]);
     }
 
-    public function consultarPrestamos()
+    public function consultarPrestamos(): mixed
     {
         $this->connect();
 
         return $this->client->__soapCall('consultarPrestamos', []);
     }
 
-    public function consultarEquipo(int $equipoId)
+    /** @return list<array<string, mixed>> */
+    public function prestamos(): array
+    {
+        $response = (array) $this->consultarPrestamos();
+        $rows = $response['datos'] ?? null;
+
+        if (($response['exito'] ?? null) !== true || ! is_array($rows) || ! array_is_list($rows)) {
+            throw new \UnexpectedValueException('Respuesta de préstamos SOAP inválida.');
+        }
+
+        return array_map(function (mixed $row): array {
+            $loan = (array) $row;
+            foreach (['id', 'solicitante_id'] as $field) {
+                if (filter_var($loan[$field] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false) {
+                    throw new \UnexpectedValueException('Identidad de préstamo SOAP inválida.');
+                }
+            }
+
+            return $loan;
+        }, $rows);
+    }
+
+    public function consultarEquipo(int $equipoId): mixed
     {
         $this->connect();
 
         return $this->client->__soapCall('consultarEquipo', ['id' => $equipoId]);
     }
 
-    public function actualizarEstadoEquipo(int $equipoId, string $nombre, string $tipo, string $estado)
+    public function actualizarEstadoEquipo(int $equipoId, string $nombre, string $tipo, string $estado): mixed
     {
         $this->connect();
 
@@ -88,16 +110,6 @@ class SoapLoanService
             'nombre' => $nombre,
             'tipo' => $tipo,
             'estado' => $estado,
-        ]);
-    }
-
-    public function autenticarEnSoap(string $username, string $password): mixed
-    {
-        $this->connect();
-
-        return $this->client->__soapCall('login', [
-            'username' => $username,
-            'password' => $password,
         ]);
     }
 }

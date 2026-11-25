@@ -38,6 +38,10 @@ return [
     */
 
     'guards' => [
+        'jwt' => [
+            'driver' => 'jwt',
+            'provider' => 'users',
+        ],
         'web' => [
             'driver' => 'session',
             'provider' => 'users',

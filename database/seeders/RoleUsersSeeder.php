@@ -40,6 +40,8 @@ class RoleUsersSeeder extends Seeder
         ];
 
         foreach ($usuarios as $data) {
+            $data['soap_username'] = $data['role'];
+
             User::updateOrCreate(
                 ['email' => $data['email']],
                 $data

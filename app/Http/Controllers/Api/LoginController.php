@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api;
 
 use App\Http\Controllers\Controller;
+use App\Models\User;
 use App\Services\JwtService;
 use App\Services\SoapLoanService;
 use Illuminate\Http\JsonResponse;
@@ -20,7 +21,9 @@ class LoginController extends Controller
 
         try {
             $result = $soap->login($credentials['username'], $credentials['password']);
-        } catch (Throwable) {
+        } catch (Throwable $exception) {
+            report($exception);
+
             return response()->json(['message' => 'No se pudo autenticar con el servicio SOAP.'], 502);
         }
 
@@ -32,10 +35,21 @@ class LoginController extends Controller
             return response()->json(['message' => 'Credenciales incorrectas.'], 401);
         }
 
+        $user = User::where('soap_username', $credentials['username'])->first();
+
+        if (! $user || $user->soap_username !== $credentials['username']) {
+            return response()->json(['message' => 'Credenciales incorrectas.'], 401);
+        }
+
+        if (! in_array($user->role, User::ROLES, true)) {
+            return response()->json(['error' => 'Permisos insuficientes para ejecutar este método'], 403);
+        }
+
         return response()->json([
             'token' => $jwt->issue($credentials['username']),
             'token_type' => 'Bearer',
             'expires_in' => config('jwt.ttl'),
+            'user' => ['id' => $user->id, 'name' => $user->name, 'role' => $user->role],
         ])->header('Cache-Control', 'no-store');
     }
 }

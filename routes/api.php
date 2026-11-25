@@ -1,15 +1,21 @@
 <?php
 
-use Illuminate\Support\Facades\Route;
-use App\Http\Controllers\Api\SancionController;
+use App\Http\Controllers\Api\LoginController;
 use App\Http\Controllers\Api\ReposicionController;
+use App\Http\Controllers\Api\SancionController;
+use App\Http\Middleware\AuthenticateJwt;
+use Illuminate\Support\Facades\Route;
 
 Route::prefix('v1')->group(function () {
-    // Sanciones
-    Route::post('/sanciones', [SancionController::class, 'store']);
-    Route::get('/solicitantes/{id}/sanciones', [SancionController::class, 'consultarPorSolicitante']);
+    Route::post('/login', LoginController::class)->middleware('throttle:5,1');
 
-    // Reposiciones
-    Route::post('/reposiciones', [ReposicionController::class, 'store']);
-    Route::put('/reposiciones/{id}/completar', [ReposicionController::class, 'completarReposicion']);
+    Route::middleware(AuthenticateJwt::class)->group(function () {
+        // Sanciones
+        Route::post('/sanciones', [SancionController::class, 'store']);
+        Route::get('/solicitantes/{id}/sanciones', [SancionController::class, 'consultarPorSolicitante']);
+
+        // Reposiciones
+        Route::post('/reposiciones', [ReposicionController::class, 'store']);
+        Route::put('/reposiciones/{id}/completar', [ReposicionController::class, 'completarReposicion']);
+    });
 });

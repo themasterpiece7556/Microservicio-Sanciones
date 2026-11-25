@@ -8,19 +8,12 @@ use Symfony\Component\HttpFoundation\Response;
 
 class CanManageSanctions
 {
-    /**
-     * Handle an incoming request.
-     *
-     * @param  Closure(Request): (Response)  $next
-     */
-    public function handle(Request $request, Closure $next): Response
+    public function handle(Request $request, Closure $next, string $operation): Response
     {
         $user = $request->user();
 
-        if (! $user || $user->role !== 'encargado_laboratorio') {
-            return response()->json([
-                'error' => 'Permisos insuficientes para ejecutar este método',
-            ], 403);
+        if (! $user || $user->role !== 'encargado_laboratorio' || ! in_array($operation, ['login', 'registrarSancion', 'consultarSancionesSolicitante'], true)) {
+            return response()->json(['error' => 'Permisos insuficientes para ejecutar este método'], 403);
         }
 
         return $next($request);
